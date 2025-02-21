@@ -35,7 +35,7 @@ pip install PyQt5 Pillow py7zr pycryptodome
 
 1. Клонируйте репозиторий или скачайте приложение.  
 
-git clone https://github.com/yourusername/ProCrypt.git
+git clone https://github.com/v01dedknight/ProCrypt.git
 cd ProCrypt
 
 2. Запустите приложение:  
