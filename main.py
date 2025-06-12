@@ -1,253 +1,189 @@
 import sys
 import os
 import random
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QCheckBox, QPushButton, QSpinBox, QLabel, QDoubleSpinBox, QFileDialog, QLineEdit, QMessageBox, QTableView, QInputDialog
-from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QStringListModel, Qt
-from PyQt5 import QtCore
-from PyQt5.uic import loadUi
-from PyQt5.QtSql import QSqlDatabase, QSqlTableModel
-import hashlib
 import string
 import re
 import py7zr
-from PIL import Image
-from PIL.ExifTags import TAGS
 import subprocess
 import shutil
 import sqlite3
 import base64
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
-from Crypto.Protocol.KDF import PBKDF2
+import secrets
+from PIL import Image
+from PIL.ExifTags import TAGS
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QAction, QWidget, QComboBox, QCheckBox, QPushButton, QSpinBox, QLabel, QDoubleSpinBox, QFileDialog, QLineEdit, QMessageBox, QTableView, QInputDialog, QListView
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QStringListModel, Qt
+from PyQt5 import QtCore, uic, QtWidgets
+from PyQt5.QtSql import QSqlDatabase, QSqlTableModel
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-# Генерирует ключ шифрования из пароля с использованием соли
-def generate_key_from_password(password, salt):
-    return PBKDF2(password, salt, dkLen=32)  # dkLen=32 делает ключ подходящим для AES-256
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import ParagraphStyle
 
-# Шифрует пароль с использованием AES-256
-def encrypt_password(password, encryption_key):
-    cipher = AES.new(encryption_key, AES.MODE_CBC)
-    iv = cipher.iv
-    encrypted = cipher.encrypt(pad(password.encode('utf-8'), AES.block_size))
-    return base64.b64encode(iv + encrypted).decode('utf-8')
+from lzma import LZMAError
 
-# Расшифровывает пароль, зашифрованный AES-256
-def decrypt_password(encrypted_password, encryption_key):
-    encrypted_data = base64.b64decode(encrypted_password)
-    iv = encrypted_data[:AES.block_size]
-    encrypted_password = encrypted_data[AES.block_size:]
-    cipher = AES.new(encryption_key, AES.MODE_CBC, iv)
-    return unpad(cipher.decrypt(encrypted_password), AES.block_size).decode('utf-8')
+# Класс вкладки Менеджер
+class Manager(QtWidgets.QWidget):
+    def __init__(self, tabWidget, parent=None):
+        super().__init__(parent)
+        self.tabWidget = tabWidget
+        self.manager = self.tabWidget.findChild(QWidget, 'Manager')
 
-# Возвращает абсолютный путь к ресурсу, совместимый с PyInstaller
-def resource_path(relative_path):
-    if hasattr(sys, '_MEIPASS'):
-        # PyInstaller упаковывает ресурсы в эту папку
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+        # Виджеты
+        self.pass_fordb_lineEdit = self.manager.findChild(QLineEdit, "pass_fordb_lineEdit")
+        self.pass_delete_pushButton = self.manager.findChild(QPushButton, "pass_delete_pushButton")
+        self.pass_edit_pushButton = self.manager.findChild(QPushButton, "pass_edit_pushButton")
+        self.open_arch_pushButton = self.manager.findChild(QPushButton, "open_arch_pushButton")
+        self.iagree_checkBox = self.manager.findChild(QCheckBox, "iagree_checkBox")
+        self.db_tableView = self.manager.findChild(QTableView, "db_tableView")
+        self.update_pushButton = self.manager.findChild(QPushButton, "update_pushButton")
+        self.encrypt_pushButton = self.manager.findChild(QPushButton, "encrypt_pushButton")
+        self.decrypt_pushButton = self.manager.findChild(QPushButton, "decrypt_pushButton")
+        self.pass_add_pushButton = self.manager.findChild(QPushButton, "pass_add_pushButton")
+        self.source_fordb_lineEdit = self.manager.findChild(QLineEdit, "source_fordb_lineEdit")
 
-# Возвращает путь к базе данных и копирует её в рабочую директорию, если это необходимо
-def get_database_path():
-    app_data_dir = os.path.abspath(".")  # Рабочая директория приложения
-    db_source_path = resource_path('data/PM.db')  # База данных внутри архива
-    db_target_path = os.path.join(app_data_dir, 'PM.db')  # Копия базы данных в рабочей директории
-
-    # Если базы данных ещё нет в рабочей директории, скопировать её
-    if not os.path.exists(db_target_path):
-        try:
-            shutil.copy(db_source_path, db_target_path)
-        except Exception as e:
-            QMessageBox.critical(None, "Ошибка", f"Не удалось скопировать базу данных: {e}")
-            sys.exit(1)  # Завершение программы, если копирование невозможно
-
-    return db_target_path
-
-# Функция для инициализации базы данных
-# Создаёт таблицу Passwords в базе данных PM.db, если её ещё нет
-def initialize_password_manager_db():
-    db_path = get_database_path()
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-
-    # Создание таблицы "Passwords"
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Passwords (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            password TEXT,
-            archive_name TEXT,
-            archive_folder TEXT
-        )
-    ''')
-
-    conn.commit()
-    conn.close()
-
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        ui_path = os.path.join(os.path.dirname(__file__), 'data', 'main.ui')
-        loadUi(ui_path, self)  # Загрузка главного окна
-
-        # Подключение события внутри окна для работы с метаданными
-        self.browse_button_2.clicked.connect(self.browse_image)
-        self.watch_md_button.clicked.connect(self.display_metadata)
-        self.I_agree_checkBox_2.stateChanged.connect(self.toggle_clear_button)
-        self.clear_md_button.clicked.connect(self.clear_metadata)
-
-        # Блокировка кнопки для очистки метаданных
-        self.clear_md_button.setEnabled(False)
-
-        # Настройка виджетов
-        self.setup_gen_enc_arch_tab()
-
-        # Настройка интерфейса
-        self.setup_password_manager()
-
-        # Виджеты внутри вкладки с проверкой защиты
-        self.protect_tab = self.tabWidget.findChild(QWidget, 'Protect')
-        self.pass_edit_prcheck = self.protect_tab.findChild(QLineEdit, 'pass_edit_prcheck')
-        self.pass_edit_prcheck.textChanged.connect(self.toggle_test_button)
-        self.pass_edit_prcheck.textChanged.connect(self.toggle_save_button)
-        self.toggle_test_button()
-        self.toggle_save_button()
-        self.ProcPower_SpinBox = self.protect_tab.findChild(QDoubleSpinBox, 'ProcPower_SpinBox')
-        self.Test_button = self.protect_tab.findChild(QPushButton, 'Test_button')
-        self.years_label = self.protect_tab.findChild(QLabel, 'years')
-        self.months_label = self.protect_tab.findChild(QLabel, 'months')
-        self.days_label = self.protect_tab.findChild(QLabel, 'days')
-        self.hours_label = self.protect_tab.findChild(QLabel, 'hours')
-        self.minutes_label = self.protect_tab.findChild(QLabel, 'minutes')
-        self.seconds_label = self.protect_tab.findChild(QLabel, 'seconds')
-        self.Save_button = self.protect_tab.findChild(QPushButton, 'Save_button')
-
-        # Подключение события при нажатии кнопки к методу расчёта времени
-        self.Test_button.clicked.connect(self.calculate_time)
-        self.Save_button.clicked.connect(self.save_results)
-
-        # Виджеты внутри вкладки MakePass
-        self.makepass_tab = self.tabWidget.findChild(QWidget, 'MakePass')
-        self.symbols_button = self.makepass_tab.findChild(QCheckBox, 'spsymbols_button')
-        self.Generate_button = self.makepass_tab.findChild(QPushButton, 'Generate_button')
-        self.length_spinBox = self.makepass_tab.findChild(QSpinBox, 'length_spinBox')
-        self.main_lineEdit = self.makepass_tab.findChild(QLineEdit, 'main_lineEdit')
-        self.china_button = self.makepass_tab.findChild(QCheckBox, 'china_button')
-        self.all_button = self.makepass_tab.findChild(QCheckBox, 'all_button')
-        self.all_button.stateChanged.connect(self.toggle_all_checkboxes)
-
-        # Флажки для алфавитов
-        self.english_button = self.makepass_tab.findChild(QCheckBox, 'english_button')
-        self.numbers_button = self.makepass_tab.findChild(QCheckBox, 'numbers_button')
-        self.russian_button = self.makepass_tab.findChild(QCheckBox, 'russian_button')
-        self.bulgarian_button = self.makepass_tab.findChild(QCheckBox, 'bulgarian_button')
-        self.serbian_button = self.makepass_tab.findChild(QCheckBox, 'serbian_button')
-        self.macedonian_button = self.makepass_tab.findChild(QCheckBox, 'macedonian_button')
-        self.greek_button = self.makepass_tab.findChild(QCheckBox, 'greek_button')
-        self.japanese_button = self.makepass_tab.findChild(QCheckBox, 'japanese_button')
-        self.korean_button = self.makepass_tab.findChild(QCheckBox, 'korean_button')
-        self.german_button = self.makepass_tab.findChild(QCheckBox, 'german_button')
-        self.spanish_button = self.makepass_tab.findChild(QCheckBox, 'spanish_button')
-        self.french_button = self.makepass_tab.findChild(QCheckBox, 'french_button')
-        self.Generate_button.clicked.connect(self.generate_password)
-
-        # Подключение галочек к методу проверки состояния
-        self.symbols_button.stateChanged.connect(self.toggle_generate_button)
-        self.english_button.stateChanged.connect(self.toggle_generate_button)
-        self.numbers_button.stateChanged.connect(self.toggle_generate_button)
-        self.china_button.stateChanged.connect(self.toggle_generate_button)
-        self.russian_button.stateChanged.connect(self.toggle_generate_button)
-        self.bulgarian_button.stateChanged.connect(self.toggle_generate_button)
-        self.serbian_button.stateChanged.connect(self.toggle_generate_button)
-        self.macedonian_button.stateChanged.connect(self.toggle_generate_button)
-        self.greek_button.stateChanged.connect(self.toggle_generate_button)
-        self.japanese_button.stateChanged.connect(self.toggle_generate_button)
-        self.korean_button.stateChanged.connect(self.toggle_generate_button)
-        self.german_button.stateChanged.connect(self.toggle_generate_button)
-        self.spanish_button.stateChanged.connect(self.toggle_generate_button)
-        self.french_button.stateChanged.connect(self.toggle_generate_button)
-
-        # Установка названия окна
-        self.setWindowTitle("ProCrypt")
-
-        # Запрет на изменение размера окна
-        self.setFixedSize(self.size())
-
-        # Загрузка иконки для окна
-        icon_path = os.path.join(os.path.dirname(__file__), 'data', 'icon.png')
-        self.setWindowIcon(QIcon(icon_path))
-
-        # Проверка начального состояния галочек
-        self.toggle_generate_button()
-
-    # Получить расшифрованный пароль из базы данных
-    def get_password_from_database(self, record_id, input_password):
-        db_path = os.path.join(os.path.dirname(__file__), 'PM.db')
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-
-            # Извлекаем данные из базы
-            cursor.execute("SELECT password, salt FROM Passwords WHERE id = ?", (record_id,))
-            result = cursor.fetchone()
-            conn.close()
-
-            if result and result[0]:
-                encrypted_password, salt = result[0], base64.b64decode(result[1])
-
-                # Генерируем ключ из введённого пароля
-                encryption_key = generate_key_from_password(input_password, salt)
-
-                # Расшифровываем пароль
-                return decrypt_password(encrypted_password, encryption_key)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось получить пароль: {e}")
-        return None
-
-    # Настройка вкладки password_manager
-    def setup_password_manager(self):
-        # Подключение виджетов
-        self.pass_fordb_lineEdit = self.findChild(QLineEdit, "pass_fordb_lineEdit")
-        self.pass_delete_pushButton = self.findChild(QPushButton, "pass_delete_pushButton")
-        self.pass_copy_pushButton = self.findChild(QPushButton, "pass_copy_pushButton")
-        self.pass_edit_pushButton = self.findChild(QPushButton, "pass_edit_pushButton")
-        self.open_arch_pushButton = self.findChild(QPushButton, "open_arch_pushButton")
-        self.iagree_checkBox = self.findChild(QCheckBox, "iagree_checkBox")
-        self.db_tableView = self.findChild(QTableView, "db_tableView")
-
-        # Подключение события
+        # Подключение методов
         self.iagree_checkBox.stateChanged.connect(self.toggle_password_manager_buttons)
         self.pass_delete_pushButton.clicked.connect(self.delete_selected_password)
-        self.pass_copy_pushButton.clicked.connect(self.copy_password_to_lineedit)
         self.pass_edit_pushButton.clicked.connect(self.edit_password_in_database)
         self.open_arch_pushButton.clicked.connect(self.open_selected_archive)
-        self.toggle_password_manager_buttons()  # Начальное состояние
+        self.update_pushButton.clicked.connect(self.refresh_password_manager_table)
+        self.encrypt_pushButton.clicked.connect(self.encrypt_database)
+        self.decrypt_pushButton.clicked.connect(self.decrypt_database)
+        self.pass_add_pushButton.clicked.connect(self.add_password_in_database)
+
+        # Начальное состояние
+        self.toggle_password_manager_buttons()
 
         # Настройка отображения таблицы
         self.setup_password_manager_table()
 
-    # Обновление пароля в базе данных из pass_fordb_lineEdit
+    # Добавить пароль в базу данных
+    def add_password_in_database(self):
+        new_password = self.pass_fordb_lineEdit.text().strip()
+        archive_name = self.source_fordb_lineEdit.text().strip()
+
+
+        if not new_password:
+            QMessageBox.warning(self, "Ошибка", "Поле пароля не может быть пустым.")
+            return
+
+        db = QSqlDatabase.database()
+        if not db.isOpen():
+            QMessageBox.critical(self, "Ошибка", "Нет соединения с базой данных.")
+            return
+
+        query_str = f"INSERT INTO Passwords (password, archive_name, archive_folder) VALUES ('{new_password}', '{archive_name}', '')"
+        query = db.exec(query_str)
+
+        if query.lastError().isValid():
+            QMessageBox.critical(self, "Ошибка", f"Не удалось добавить пароль: {query.lastError().text()}")
+        else:
+            self.refresh_password_manager_table()
+            QMessageBox.information(self, "Успех", "Пароль успешно добавлен.")
+
+    # Сгенерировать соль
+    def generate_salt(self, size=16):
+        return secrets.token_bytes(size)
+
+    # Загрузить соль
+    def load_salt(self):
+        return open("data/salt.salt", "rb").read()
+
+    # Вывести ключ
+    def derive_key(self, salt, password):
+        kdf = Scrypt(salt=salt, length=32, n=2**14, r=8, p=1)
+        return kdf.derive(password.encode())
+
+    # Сгенерировать ключ
+    def generate_key(self, password, salt_size=16, load_existing_salt=False, save_salt=True):
+        if load_existing_salt:
+            salt = self.load_salt()
+        elif save_salt:
+            salt = self.generate_salt(salt_size)
+            with open("data/salt.salt", "wb") as salt_file:
+                salt_file.write(salt)
+
+        derived_key = self.derive_key(salt, password)
+        return base64.urlsafe_b64encode(derived_key)
+
+    # Шифрование
+    def encrypt(self, filename, key):
+        f = Fernet(key)
+
+        with open(filename, "rb") as file:
+            file_data = file.read()
+
+        encrypted_data = f.encrypt(file_data)
+
+        with open(filename, "wb") as file:
+            file.write(encrypted_data)
+
+    # Дешифрование
+    def decrypt(self, filename, key):
+        f = Fernet(key)
+        with open(filename, "rb") as file:
+            encrypted_data = file.read()
+        try:
+            decrypted_data = f.decrypt(encrypted_data)
+            with open(filename, "wb") as file:
+                file.write(decrypted_data)
+            QMessageBox.information(self, "Успех", "База данных успешно расшифрована.")
+            self.setup_password_manager_table()
+        except Exception:
+            QMessageBox.critical(self, "Ошибка", "Неверный пароль или поврежденный файл.")
+
+    # Зашифровать базу данных
+    def encrypt_database(self):
+        password = self.pass_fordb_lineEdit.text().strip()
+        if not password:
+            QMessageBox.warning(self, "Ошибка", "Введите пароль для шифрования базы данных.")
+            return
+        
+        try:
+            key = self.generate_key(password, load_existing_salt=True)
+            db_path = os.path.join(os.path.dirname(__file__), 'data', 'PM.db')
+            self.encrypt(db_path, key)
+            QMessageBox.information(self, "Успех", "База данных успешно зашифрована.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось зашифровать базу данных: {e}")
+
+    # Дешифровать базу данных
+    def decrypt_database(self):
+        password = self.pass_fordb_lineEdit.text().strip()
+        if not password:
+            QMessageBox.warning(self, "Ошибка", "Введите пароль для расшифровки базы данных.")
+            return
+        try:
+            key = self.generate_key(password, load_existing_salt=True)
+            db_path = os.path.join(os.path.dirname(__file__), 'data', 'PM.db')
+            self.decrypt(db_path, key)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось расшифровать базу данных: {e}")
+
+    # Обновление пароля в базе данных
     def edit_password_in_database(self):
         selection_model = self.db_tableView.selectionModel()
         if not selection_model.hasSelection():
             QMessageBox.warning(self, "Ошибка", "Выберите запись для редактирования.")
             return
 
-        # Новый пароль из поля
         new_password = self.pass_fordb_lineEdit.text().strip()
         if not new_password:
             QMessageBox.warning(self, "Ошибка", "Поле пароля не может быть пустым.")
             return
 
-        # Индекс выбранной строки
         index = selection_model.currentIndex()
         row = index.row()
         record = self.passwords_model.record(row)
         record_id = record.value("id")
 
-        # Обновление пароля в базе данных
         query = QSqlDatabase.database().exec(
             f"UPDATE Passwords SET password='{new_password}' WHERE id={record_id}"
         )
@@ -261,15 +197,13 @@ class MainWindow(QMainWindow):
     def toggle_password_manager_buttons(self):
         state = self.iagree_checkBox.isChecked()
         self.pass_delete_pushButton.setEnabled(state)
-        self.pass_copy_pushButton.setEnabled(state)
         self.pass_edit_pushButton.setEnabled(state)
         self.open_arch_pushButton.setEnabled(state)
+        self.pass_add_pushButton.setEnabled(state)
 
-    # Настройка отображения таблицы Passwords в db_tableView с фильтрацией NULL-значений
+    # Настройка отображения таблицы
     def setup_password_manager_table(self):
-        db_path = get_database_path()
-
-        # Подключение базы данных
+        db_path = os.path.join(os.path.dirname(__file__), 'data', 'PM.db')
         self.db = QSqlDatabase.addDatabase("QSQLITE")
         self.db.setDatabaseName(db_path)
 
@@ -277,135 +211,142 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", "Не удалось подключиться к базе данных.")
             return
 
-        # Настройка модели таблицы
         self.passwords_model = QSqlTableModel(self, self.db)
         self.passwords_model.setTable("Passwords")
-        
-        # Фильтрация записи, где хотя бы один столбец NULL
         self.passwords_model.setFilter("password IS NOT NULL AND archive_name IS NOT NULL AND archive_folder IS NOT NULL")
-        self.passwords_model.select()  # Применение фильтра и загрузка данных
+        self.passwords_model.select()
 
-        # Названия столбцов
         self.passwords_model.setHeaderData(1, Qt.Horizontal, "Пароль")
-        self.passwords_model.setHeaderData(2, Qt.Horizontal, "Название архива")
+        self.passwords_model.setHeaderData(2, Qt.Horizontal, "От чего пароль")
         self.passwords_model.setHeaderData(3, Qt.Horizontal, "Путь к архиву")
 
-        # Настройка представления
         self.db_tableView.setModel(self.passwords_model)
-        self.db_tableView.setEditTriggers(QTableView.NoEditTriggers)  # Только для просмотра
-        self.db_tableView.hideColumn(0)  # Убрать колонку 'id'
+        self.db_tableView.setEditTriggers(QTableView.NoEditTriggers)
+        self.db_tableView.hideColumn(0)
 
-    # Обновление данных в db_tableView с учётом фильтра
+    # Обновление данных с учётом фильтра
     def refresh_password_manager_table(self):
         self.passwords_model.setFilter("password IS NOT NULL AND archive_name IS NOT NULL AND archive_folder IS NOT NULL")
         self.passwords_model.select()
 
-    # Копирует пароль из выбранной записи в pass_fordb_lineEdit
-    def copy_password_to_lineedit(self):
+    # Открыть и распаковать архив с проверкой корректности пароля
+    def open_selected_archive(self):
         selection_model = self.db_tableView.selectionModel()
         if not selection_model.hasSelection():
-            QMessageBox.warning(self, "Ошибка", "Выберите запись для копирования пароля.")
+            QMessageBox.warning(self, "Ошибка", "Выберите запись, чтобы открыть архив.")
             return
 
-        # Индекс выбранной строки
         index = selection_model.currentIndex()
         row = index.row()
         record = self.passwords_model.record(row)
-        password = record.value("password")
 
-        if password is None:
-            QMessageBox.warning(self, "Ошибка", "У выбранной записи нет пароля.")
-            return
-
-        # Очистить поле и вставить пароль
-        self.pass_fordb_lineEdit.clear()
-        self.pass_fordb_lineEdit.setText(password)
-
-    # Открыть архив с использованием пароля из базы данных.
-    def open_selected_archive(self):
-        selected_index = self.db_tableView.currentIndex()
-        if not selected_index.isValid():
-            QMessageBox.warning(self, "Ошибка", "Пожалуйста, выберите запись в таблице.")
-            return
-
-        # Получаем данные о выбранной записи
-        record_id = self.passwords_model.data(self.passwords_model.index(selected_index.row(), 0))  # ID записи
-        archive_path = self.passwords_model.data(self.passwords_model.index(selected_index.row(), 2))  # Путь к архиву
-        encrypted_password = self.passwords_model.data(self.passwords_model.index(selected_index.row(), 1))  # Зашифрованный пароль
+        archive_path = record.value("archive_folder")
+        archive_password = record.value("password")
 
         if not archive_path:
-            QMessageBox.warning(self, "Ошибка", "Путь к архиву отсутствует в базе данных.")
+            QMessageBox.warning(self, "Ошибка", "Путь к архиву отсутствует.")
             return
 
-        # Преобразуем путь в абсолютный, если он относительный
-        if not os.path.isabs(archive_path):
-            archive_path = os.path.abspath(os.path.join(os.path.dirname(__file__), archive_path))
+        archive_path = os.path.normpath(archive_path)
 
-        if not os.path.isfile(archive_path):
-            QMessageBox.warning(self, "Ошибка", f"Файл архива не найден по пути: {archive_path}")
+        if not os.path.exists(archive_path):
+            QMessageBox.critical(self, "Ошибка", f"Файл {archive_path} не существует.")
             return
 
-        try:
-            # Получаем соль из базы данных
-            db_path = os.path.join(os.path.dirname(__file__), 'PM.db')
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT salt FROM Passwords WHERE id = ?", (record_id,))
-            result = cursor.fetchone()
-            conn.close()
+        options = QFileDialog.Options()
+        extract_path = QFileDialog.getExistingDirectory(
+            self, "Выберите папку для распаковки", "", options=options
+        )
 
-            if not result or not result[0]:
-                QMessageBox.critical(self, "Ошибка", "Соль для записи не найдена.")
+        if not extract_path:
+            return
+
+        def try_open_archive(path, password):
+            try:
+                with py7zr.SevenZipFile(path, mode='r', password=password) as archive:
+                    archive.getnames()
+                return True
+            except (LZMAError, ValueError):
+                return False
+            except Exception as e:
+                print(f"[Ошибка открытия архива] {e}")
+                return False
+
+        if not try_open_archive(archive_path, archive_password):
+            
+            # Запрос на новый пароль
+            dialog = QInputDialog(self)
+            dialog.setWindowTitle("Неверный пароль")
+            dialog.setLabelText(f"Введите пароль для архива:\n{archive_path}")
+            dialog.setTextEchoMode(QLineEdit.Password)
+            dialog.resize(400, 200)
+            dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+            if dialog.exec_() == QInputDialog.Accepted:
+                new_password = dialog.textValue()
+                if not new_password:
+                    QMessageBox.warning(self, "Ошибка", "Распаковка отменена.")
+                    return
+                if not try_open_archive(archive_path, new_password):
+                    QMessageBox.critical(self, "Ошибка", "Неверный пароль или ошибка архива.")
+                    return
+                archive_password = new_password
+            else:
+                QMessageBox.warning(self, "Ошибка", "Распаковка отменена.")
                 return
 
-            salt = base64.b64decode(result[0])  # Декодируем соль
-            encryption_key = generate_key_from_password("your_password_for_key", salt)  # Пароль для ключа
-
-            # Расшифровываем пароль
-            decrypted_password = decrypt_password(encrypted_password, encryption_key)
-
-            # Открываем архив
-            with py7zr.SevenZipFile(archive_path, mode='r', password=decrypted_password) as archive:
-                extract_path = QFileDialog.getExistingDirectory(self, "Выберите папку для извлечения")
-                if not extract_path:
-                    return  # Пользователь отменил выбор
-                archive.extractall(extract_path)
-                QMessageBox.information(self, "Успех", f"Архив успешно извлечён в: {extract_path}")
-
+        try:
+            with py7zr.SevenZipFile(archive_path, mode='r', password=archive_password) as archive:
+                archive.extractall(path=extract_path)
+            QMessageBox.information(self, "Успех", f"Архив успешно распакован в: {extract_path}")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть архив: {e}")
+            QMessageBox.critical(self, "Ошибка", f"Не удалось распаковать архив: {e}")
 
-
-    # Удаляет выбранную запись из базы данных Passwords
+    # Замена значений выбранной записи на NULL
     def delete_selected_password(self):
-        selected_index = self.db_tableView.currentIndex()
-        if not selected_index.isValid():
-            QMessageBox.warning(self, "Ошибка", "Пожалуйста, выберите запись для удаления.")
+        selection_model = self.db_tableView.selectionModel()
+        if not selection_model.hasSelection():
+            QMessageBox.warning(self, "Ошибка", "Выберите запись для удаления.")
             return
 
-        # Получаем ID записи
-        record_id = self.passwords_model.data(self.passwords_model.index(selected_index.row(), 0))  # ID записи
+        index = selection_model.currentIndex()
+        row = index.row()
+        record = self.passwords_model.record(row)
+        record_id = record.value("id")
 
-        db_path = os.path.join(os.path.dirname(__file__), 'PM.db')
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+        if QMessageBox.question(self, "Подтверждение", "Вы уверены, что хотите обнулить запись?",
+                                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            query = QSqlDatabase.database().exec(
+                f"UPDATE Passwords SET password=NULL, archive_name=NULL, archive_folder=NULL WHERE id={record_id}"
+            )
+            if query.lastError().isValid():
+                QMessageBox.critical(self, "Ошибка", f"Не удалось обнулить запись: {query.lastError().text()}")
+            else:
+                self.refresh_password_manager_table()
+                QMessageBox.information(self, "Успех", "Запись успешно обнулена.")
 
-            # Удаляем запись из базы данных
-            cursor.execute("DELETE FROM Passwords WHERE id = ?", (record_id,))
-            conn.commit()
-            conn.close()
+# Класс вкладки Архивы
+class Archives(QtWidgets.QWidget):
+    def __init__(self, tabWidget, parent=None):
+        super().__init__(parent)
+        self.tabWidget = tabWidget
+        self.archives = self.tabWidget.findChild(QWidget, 'Archives')
 
-            # Обновляем таблицу
-            self.refresh_password_manager_table()
-            QMessageBox.information(self, "Успех", "Запись успешно удалена.")
+        # Виджеты
+        self.method_comboBox = self.archives.findChild(QComboBox, 'method_comboBox')
+        self.level_comboBox = self.archives.findChild(QComboBox, 'level_comboBox')
+        self.enc_method_comboBox = self.archives.findChild(QComboBox, 'enc_method_comboBox')
+        self.browse_button = self.archives.findChild(QPushButton, 'browse_button')
+        self.create_arc_button = self.archives.findChild(QPushButton, 'create_arc_button')
+        self.nopass_checkBox = self.archives.findChild(QCheckBox, 'nopass_checkBox')
+        self.I_agree_checkBox = self.archives.findChild(QCheckBox, 'I_agree_checkBox')
+        self.saveindb_checkBox = self.archives.findChild(QCheckBox, "saveindb_checkBox")
+        self.password_arch_edit = self.archives.findChild(QLineEdit, 'password_arch_edit')
+        self.filenames_checkBox = self.archives.findChild(QCheckBox, 'filenames_checkBox')
+        self.folder_edit = self.archives.findChild(QLineEdit, 'folder_edit')
+        self.sorting_checkBox = self.archives.findChild(QCheckBox, 'sorting_checkBox')
 
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось удалить запись: {e}")
-
-
-    # Настройка вкладки GenEncArch
-    def setup_gen_enc_arch_tab(self):
+        # Параметры виджетов
         self.method_comboBox.addItems(["LZMA2", "LZMA", "PPMd", "BZip2"])
         self.method_comboBox.setCurrentText("LZMA2")
         self.level_comboBox.addItems([
@@ -422,27 +363,14 @@ class MainWindow(QMainWindow):
         self.nopass_checkBox.stateChanged.connect(self.toggle_password_options)
         self.I_agree_checkBox.stateChanged.connect(self.toggle_create_button)
 
-        self.saveindb_checkBox = self.findChild(QCheckBox, "saveindb_checkBox")
-
         # Изначально выключить кнопку создания архива
         self.create_arc_button.setEnabled(False)
-
-    # Активировать или деактивировать кнопку создания архива в зависимости от чекбокса
-    def toggle_create_button(self):
-        self.create_arc_button.setEnabled(self.I_agree_checkBox.isChecked())
 
     # Открыть проводник для выбора папки
     def select_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "Выберите папку для архивации")
         if folder_path:
             self.folder_edit.setText(folder_path)
-
-    # Включить/выключить элементы управления для шифрования
-    def toggle_password_options(self):
-        nopass_active = self.nopass_checkBox.isChecked()
-        self.password_arch_edit.setEnabled(not nopass_active)
-        self.filenames_checkBox.setEnabled(not nopass_active)
-        self.enc_method_comboBox.setEnabled(not nopass_active)
 
     # Создать архив с учётом состояния чекбоксов
     def create_encrypted_archive(self):
@@ -461,7 +389,7 @@ class MainWindow(QMainWindow):
         )
 
         if not save_path:
-            return  # Пользователь отменил выбор
+            return  # Отмена выбора
 
         password = self.password_arch_edit.text().strip() if not self.nopass_checkBox.isChecked() else None
         if not password and not self.nopass_checkBox.isChecked():
@@ -521,9 +449,9 @@ class MainWindow(QMainWindow):
                 return
 
         try:
-            # Формировать команду для создания архива
+            # Команда для создания архива
             command = [
-                rf"C:\Program Files\7-Zip\7z.exe", "a",  # Команда "add" для создания архива
+                rf"C:\Program Files\7-Zip\7z.exe", "a",  # Команда для создания архива
                 save_path,  # Путь к создаваемому архиву
                 source_path,  # Исходная папка для архивации
                 f"-mx={compression_level}",  # Уровень сжатия
@@ -559,53 +487,104 @@ class MainWindow(QMainWindow):
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-    # Сохраняет запись с зашифрованным паролем в базу данных
+    # Вкл выкл элементы управления для шифрования
+    def toggle_password_options(self):
+        nopass_active = self.nopass_checkBox.isChecked()
+        self.password_arch_edit.setEnabled(not nopass_active)
+        self.filenames_checkBox.setEnabled(not nopass_active)
+        self.enc_method_comboBox.setEnabled(not nopass_active)
+
+    # Активировать или деактивировать кнопку создания архива в зависимости от чекбокса
+    def toggle_create_button(self):
+        self.create_arc_button.setEnabled(self.I_agree_checkBox.isChecked())
+
+    # Добавить запись в таблицу
     def save_archive_to_database(self, password, archive_name, archive_folder):
-        db_path = os.path.join(os.path.dirname(__file__), 'PM.db')
+        db_path = os.path.join(os.path.dirname(__file__), 'data', 'PM.db')
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 
-            # Генерация соли
-            salt = os.urandom(16)
-
-            # Генерация ключа и шифрование пароля
-            encryption_key = generate_key_from_password(password, salt)
-            encrypted_password = encrypt_password(password, encryption_key)
-
-            # Сохранение данных в базу
+            # Добавить запись в таблицу
             cursor.execute('''
-                INSERT INTO Passwords (password, archive_name, archive_folder, salt)
-                VALUES (?, ?, ?, ?)
-            ''', (encrypted_password, archive_name, archive_folder, base64.b64encode(salt).decode('utf-8')))
+                INSERT INTO Passwords (password, archive_name, archive_folder)
+                VALUES (?, ?, ?)
+            ''', (password, archive_name, archive_folder))
 
             conn.commit()
             conn.close()
-            self.refresh_password_manager_table()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить запись: {e}")
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить запись в базу данных: {e}")
 
-    # Создание архива с указанным паролем
-    def create_single_archive(self, source, destination, password=None):
-        command = [
-            rf"C:\Program Files\7-Zip\7z.exe", "a",
-            destination,
-            source,
-            "-mx=5",  # Уровень сжатия
-        ]
-        if password:
-            command.append(f"-p{password}")
-            command.append("-mhe=on")
+# Класс вкладки Метаданные
+class Metadata(QtWidgets.QWidget):
+    def __init__(self, tabWidget, parent=None):
+        super().__init__(parent)
+        self.tabWidget = tabWidget
+        self.metadata = self.tabWidget.findChild(QWidget, 'Metadata')
 
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode != 0:
-            raise Exception(result.stderr.decode())
+        # Виджеты
+        self.I_agree_checkBox_2 = self.metadata.findChild(QCheckBox, 'I_agree_checkBox_2')
+        self.picture_edit = self.metadata.findChild(QLineEdit, 'picture_edit')
+        self.listView = self.metadata.findChild(QListView, 'listView')
 
-    # Включить или отключить кнопку в зависимости от состояния чекбокса
+        # Кнопки
+        self.browse_button_2 = self.metadata.findChild(QPushButton, 'browse_button_2')
+        self.watch_md_button = self.metadata.findChild(QPushButton, 'watch_md_button')
+        self.clear_md_button = self.metadata.findChild(QPushButton, 'clear_md_button')
+
+        # Подключение события внутри окна для работы с метаданными
+        self.browse_button_2.clicked.connect(self.browse_image)
+        self.watch_md_button.clicked.connect(self.display_metadata)
+        self.I_agree_checkBox_2.stateChanged.connect(self.toggle_clear_button)
+        self.clear_md_button.clicked.connect(self.clear_metadata)
+
+        # Блокировка кнопки для очистки метаданных
+        self.clear_md_button.setEnabled(False)
+
+    # Обработчик для выбора изображения
+    def browse_image(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите изображение",
+            "",
+            "Images (*.jpg *.jpeg)",
+            options=options
+        )
+        if file_path:
+            self.picture_edit.setText(file_path)  # Путь в поле ввода
+
+    # Обработчик для отображения метаданных
+    def display_metadata(self):
+        file_path = self.picture_edit.text().strip()
+        if not file_path or not os.path.isfile(file_path):
+            QMessageBox.warning(self, "Ошибка", "Пожалуйста, выберите корректный файл изображения!")
+            return
+
+        try:
+            # Открыть изображение и извлечь exif данные
+            image = Image.open(file_path)
+            exif_data = image._getexif()
+            metadata = []
+
+            if exif_data:
+                for tag_id, value in exif_data.items():
+                    tag_name = TAGS.get(tag_id, tag_id)  # Имя тега
+                    metadata.append(f"{tag_name}: {value}")
+            else:
+                metadata.append("Метаданные отсутствуют")
+
+            # Отображение метаданных
+            model = QStringListModel()
+            model.setStringList(metadata)
+            self.listView.setModel(model)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось прочитать метаданные: {e}")
+
+    # Вкл выкл кнопки в зависимости от чекбокса
     def toggle_clear_button(self, state):
         self.clear_md_button.setEnabled(state == QtCore.Qt.Checked)
 
@@ -642,76 +621,39 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось удалить метаданные: {e}")
 
-    # Обработчик для выбора изображения
-    def browse_image(self):
-        options = QFileDialog.Options()
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Выберите изображение",
-            "",
-            "Images (*.jpg *.jpeg)",
-            options=options
-        )
-        if file_path:
-            self.picture_edit.setText(file_path)  # Путь в поле ввода
+# Класс вкладки Защита
+class Protect(QtWidgets.QWidget):
+    def __init__(self, tabWidget, parent=None):
+        super().__init__(parent)
+        self.tabWidget = tabWidget
+        self.protect_tab = self.tabWidget.findChild(QWidget, 'Protect')
 
-    # Обработчик для отображения метаданных
-    def display_metadata(self):
-        file_path = self.picture_edit.text().strip()
-        if not file_path or not os.path.isfile(file_path):
-            QMessageBox.warning(self, "Ошибка", "Пожалуйста, выберите корректный файл изображения!")
-            return
+        # Виджеты внутри вкладки с проверкой защиты
+        self.pass_edit_prcheck = self.protect_tab.findChild(QLineEdit, 'pass_edit_prcheck')
+        self.ProcPower_SpinBox = self.protect_tab.findChild(QDoubleSpinBox, 'ProcPower_SpinBox')
+        self.years_label = self.protect_tab.findChild(QLabel, 'years')
+        self.months_label = self.protect_tab.findChild(QLabel, 'months')
+        self.days_label = self.protect_tab.findChild(QLabel, 'days')
+        self.hours_label = self.protect_tab.findChild(QLabel, 'hours')
+        self.minutes_label = self.protect_tab.findChild(QLabel, 'minutes')
+        self.seconds_label = self.protect_tab.findChild(QLabel, 'seconds')
+        self.dictionaries_checkBox = self.protect_tab.findChild(QCheckBox, 'dictionaries_checkBox')
+        self.prot_level_fchange = self.protect_tab.findChild(QLabel, 'prot_level_fchange')
 
-        try:
-            # Открыть изображение и извлечь EXIF-данные
-            image = Image.open(file_path)
-            exif_data = image._getexif()
-            metadata = []
+        # Кнопки
+        self.Test_button = self.protect_tab.findChild(QPushButton, 'Test_button')
+        self.Save_button = self.protect_tab.findChild(QPushButton, 'Save_button')
 
-            if exif_data:
-                for tag_id, value in exif_data.items():
-                    tag_name = TAGS.get(tag_id, tag_id)  # Имя тега
-                    metadata.append(f"{tag_name}: {value}")
-            else:
-                metadata.append("Метаданные отсутствуют")
+        # Подключение события при нажатии кнопки к методу расчёта времени
+        self.pass_edit_prcheck.textChanged.connect(self.toggle_test_button)
+        self.pass_edit_prcheck.textChanged.connect(self.toggle_save_button)
+        self.Test_button.clicked.connect(self.calculate_time)
+        self.Save_button.clicked.connect(self.save_results)
 
-            # Отображение метаданных
-            model = QStringListModel()
-            model.setStringList(metadata)
-            self.listView.setModel(model)
+        self.toggle_test_button()
+        self.toggle_save_button()
 
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось прочитать метаданные: {e}")
-
-    # Переключение всех чекбоксов
-    def toggle_all_checkboxes(self, state):
-        self.russian_button.setChecked(state)
-        self.bulgarian_button.setChecked(state)
-        self.serbian_button.setChecked(state)
-        self.macedonian_button.setChecked(state)
-        self.greek_button.setChecked(state)
-        self.japanese_button.setChecked(state)
-        self.korean_button.setChecked(state)
-        self.german_button.setChecked(state)
-        self.spanish_button.setChecked(state)
-        self.french_button.setChecked(state)
-        self.symbols_button.setChecked(state)
-        self.english_button.setChecked(state)
-        self.numbers_button.setChecked(state)
-        self.china_button.setChecked(state)
-
-    # Переключение кнопки генерации
-    def toggle_generate_button(self):
-        if (self.symbols_button.isChecked() or self.english_button.isChecked() or self.numbers_button.isChecked() or
-            self.china_button.isChecked() or self.russian_button.isChecked() or self.bulgarian_button.isChecked() or
-            self.serbian_button.isChecked() or self.macedonian_button.isChecked() or self.greek_button.isChecked() or
-            self.japanese_button.isChecked() or self.korean_button.isChecked() or self.german_button.isChecked() or
-            self.spanish_button.isChecked() or self.french_button.isChecked()):
-            self.Generate_button.setEnabled(True)
-        else:
-            self.Generate_button.setEnabled(False)
-
-    # Переключение кнопки проверки
+    # Проверка кнопки теста
     def toggle_test_button(self):
         password = self.pass_edit_prcheck.text()
         if password:
@@ -719,7 +661,7 @@ class MainWindow(QMainWindow):
         else:
             self.Test_button.setEnabled(False)
 
-    # Переключение кнопки сохранения
+    # Проверка кнопки сохранения
     def toggle_save_button(self):
         password = self.pass_edit_prcheck.text()
         if password:
@@ -727,7 +669,7 @@ class MainWindow(QMainWindow):
         else:
             self.Save_button.setEnabled(False)
 
-    # Вычисление времени подбора пароля
+    # Вычисление времени на перебор пароля
     def calculate_time(self):
         password = self.pass_edit_prcheck.text()
         if not password:
@@ -739,18 +681,18 @@ class MainWindow(QMainWindow):
             charset_size = self.determine_charset_size(password)
         else:
             charset_size = sum([
-                32,  # special characters
-                20902,  # chinese characters
-                256,  # russian characters
-                32,  # bulgarian characters
-                6,  # serbian characters
-                18,  # macedonian characters
-                134,  # greek characters
-                234,  # japanese characters
-                256,  # korean characters
-                7,  # german characters
-                13,  # spanish characters
-                42  # french characters
+                32,  # Спец символы
+                20902,  # Китайский
+                256,  # Русский
+                32,  # Болгарский
+                6,  # Сербский
+                18,  # Македонский
+                134,  # Греческий
+                234,  # Японский
+                256,  # Корейский
+                7,  # Немецкий
+                13,  # Испанский
+                42  # Французский
             ])
 
         hashes_per_second_millions = self.ProcPower_SpinBox.value()
@@ -771,7 +713,112 @@ class MainWindow(QMainWindow):
             security_level = self.calculate_security_level(time_seconds)
             self.prot_level_fchange.setText(security_level)
 
-    # Вычисление уровня надёжности пароля
+    # Сохранение результатов (для отчёта)
+    def save_results(self):
+        from PyQt5.QtWidgets import QFileDialog, QMessageBox
+
+        file_path, _ = QFileDialog.getSaveFileName(self, "Сохранить результаты", "", "PDF Files (*.pdf)")
+        if not file_path:
+            return
+
+        if not file_path.lower().endswith(".pdf"):
+            file_path += ".pdf"
+
+        if (not self.years_label.text() or
+            not self.months_label.text() or
+            not self.days_label.text() or
+            not self.hours_label.text() or
+            not self.minutes_label.text() or
+            not self.seconds_label.text()):
+            self.output_label.setText("Заполните все поля перед сохранением!")
+            return
+
+        try:
+            # Путь к шрифту DejaVuSans
+            font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+            if not os.path.exists(font_path):
+                font_path = "C:/Windows/Fonts/arial.ttf"  # Windows Arial
+
+            pdfmetrics.registerFont(TTFont("MainFont", font_path))
+
+            style = ParagraphStyle(
+                name='Main',
+                fontName='MainFont',
+                fontSize=11,
+                leading=14,
+            )
+
+            doc = SimpleDocTemplate(file_path, pagesize=A4)
+            elements = []
+
+            elements.append(Paragraph("ProCrypt - Отчёт по проверке пароля", ParagraphStyle(name='Title', fontName='MainFont', fontSize=16, alignment=1)))
+            elements.append(Spacer(1, 20))
+
+            data = [
+                ["Параметр", "Значение"],
+                ["Пароль", self.pass_edit_prcheck.text()],
+                ["Хэшей в секунду (млн)", str(self.ProcPower_SpinBox.value())],
+                ["Годы", self.years_label.text()],
+                ["Месяцы", self.months_label.text()],
+                ["Дни", self.days_label.text()],
+                ["Часы", self.hours_label.text()],
+                ["Минуты", self.minutes_label.text()],
+                ["Секунды", self.seconds_label.text()],
+            ]
+
+            table = Table(data, colWidths=[200, 250])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('FONTNAME', (0, 0), (-1, -1), 'MainFont'),
+                ('FONTSIZE', (0, 0), (-1, -1), 11),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ]))
+
+            elements.append(table)
+            elements.append(Spacer(1, 20))
+
+            note = (
+                'Данные расчёты не являются абсолютными и не могут служить точным индикатором надёжности пароля. '
+                'Оценка времени подбора пароля основана на теоретической вычислительной мощности и не учитывает всех факторов, '
+                'таких как специфические методы атак, оптимизация алгоритмов или аппаратное обеспечение злоумышленников. '
+                'Предполагается, что для шифрования используется алгоритм "AES-256".'
+            )
+
+            elements.append(Paragraph("Примечание:", style))
+            elements.append(Paragraph(note, style))
+
+            doc.build(elements)
+
+            QMessageBox.information(self, "Успех", "PDF-отчёт успешно сохранён!")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить PDF-файл: {e}")
+
+    # Расчёт времени подбора
+    def calculate_bruteforce_time(self, password_length, charset_size, hashes_per_second):
+
+        # Проверка, не превышает ли общее количество комбинаций максимально возможное значение вещественного типа
+        if charset_size ** password_length > sys.float_info.max:
+            time_seconds = float('inf')  # Установка бесконечного времени
+        else:
+            time_seconds = (charset_size ** password_length) / hashes_per_second
+        return time_seconds
+
+    # Приведение времени подбора в читабельный вид
+    def seconds_to_human_readable(self, seconds):
+        intervals = {
+            'years': seconds // 31536000,
+            'months': seconds // 2628000 % 12,
+            'days': seconds // 86400 % 30,
+            'hours': seconds // 3600 % 24,
+            'minutes': seconds // 60 % 60,
+            'seconds': seconds % 60
+        }
+        
+        return intervals
+    
+    # Определение степени защиты
     def calculate_security_level(self, time_seconds):
         if time_seconds <= 60:
             return "Очень низкий"
@@ -786,35 +833,7 @@ class MainWindow(QMainWindow):
         else:
             return "Лучший"
 
-    # Хэш пароля
-    def hash_password_sha256(self, password):
-        sha256 = hashlib.sha256()
-        sha256.update(password.encode('utf-8'))
-        return sha256.hexdigest()
-
-    # Вычисление времени на перебор
-    def calculate_bruteforce_time(self, password_length, charset_size, hashes_per_second):
-        # Проверка, не превышает ли общее количество комбинаций максимально возможное значение типа float
-        if charset_size ** password_length > sys.float_info.max:
-            time_seconds = float('inf')  # Установка времени как бесконечность
-        else:
-            time_seconds = (charset_size ** password_length) / hashes_per_second
-        return time_seconds
-
-    # Вывод времени перебора
-    def seconds_to_human_readable(self, seconds):
-        intervals = {
-            'years': seconds // 31536000,
-            'months': seconds // 2628000 % 12,
-            'days': seconds // 86400 % 30,
-            'hours': seconds // 3600 % 24,
-            'minutes': seconds // 60 % 60,
-            'seconds': seconds % 60
-        }
-        
-        return intervals
-
-    # Знаки в словаре
+    # Вычисление размера словаря (Используется только при подборе по словарю)
     def determine_charset_size(self, password):
         charset_size = 0
 
@@ -856,11 +875,63 @@ class MainWindow(QMainWindow):
         if any(french_characters.match(char) for char in password):
             charset_size += 42
         
-        # Если размер набора символов равен нулю, установить его равным 1, чтобы избежать деления на ноль
+        # Если размер набора символов равен нулю, он будет установлен на 1, чтобы избежать деления на ноль
         if charset_size == 0:
             charset_size = 1
 
         return charset_size
+
+# Класс вкладки Пароль
+class Password(QtWidgets.QWidget):
+    def __init__(self, tabWidget, parent=None):
+        super().__init__(parent)
+        self.tabWidget = tabWidget
+        self.makepass_tab = self.tabWidget.findChild(QWidget, 'Password')
+
+        # Виджеты
+        self.symbols_button = self.makepass_tab.findChild(QCheckBox, 'spsymbols_button')
+        self.Generate_button = self.makepass_tab.findChild(QPushButton, 'Generate_button')
+        self.length_spinBox = self.makepass_tab.findChild(QSpinBox, 'length_spinBox')
+        self.main_lineEdit = self.makepass_tab.findChild(QLineEdit, 'main_lineEdit')
+        self.china_button = self.makepass_tab.findChild(QCheckBox, 'china_button')
+        self.all_button = self.makepass_tab.findChild(QCheckBox, 'all_button')
+        self.all_button.stateChanged.connect(self.toggle_all_checkboxes)
+
+        # Флажки (словари)
+        self.english_button = self.makepass_tab.findChild(QCheckBox, 'english_button')
+        self.numbers_button = self.makepass_tab.findChild(QCheckBox, 'numbers_button')
+        self.russian_button = self.makepass_tab.findChild(QCheckBox, 'russian_button')
+        self.bulgarian_button = self.makepass_tab.findChild(QCheckBox, 'bulgarian_button')
+        self.serbian_button = self.makepass_tab.findChild(QCheckBox, 'serbian_button')
+        self.macedonian_button = self.makepass_tab.findChild(QCheckBox, 'macedonian_button')
+        self.greek_button = self.makepass_tab.findChild(QCheckBox, 'greek_button')
+        self.japanese_button = self.makepass_tab.findChild(QCheckBox, 'japanese_button')
+        self.korean_button = self.makepass_tab.findChild(QCheckBox, 'korean_button')
+        self.german_button = self.makepass_tab.findChild(QCheckBox, 'german_button')
+        self.spanish_button = self.makepass_tab.findChild(QCheckBox, 'spanish_button')
+        self.french_button = self.makepass_tab.findChild(QCheckBox, 'french_button')
+
+        # Подключение галочек к методу проверки состояния
+        self.symbols_button.stateChanged.connect(self.toggle_generate_button)
+        self.english_button.stateChanged.connect(self.toggle_generate_button)
+        self.numbers_button.stateChanged.connect(self.toggle_generate_button)
+        self.china_button.stateChanged.connect(self.toggle_generate_button)
+        self.russian_button.stateChanged.connect(self.toggle_generate_button)
+        self.bulgarian_button.stateChanged.connect(self.toggle_generate_button)
+        self.serbian_button.stateChanged.connect(self.toggle_generate_button)
+        self.macedonian_button.stateChanged.connect(self.toggle_generate_button)
+        self.greek_button.stateChanged.connect(self.toggle_generate_button)
+        self.japanese_button.stateChanged.connect(self.toggle_generate_button)
+        self.korean_button.stateChanged.connect(self.toggle_generate_button)
+        self.german_button.stateChanged.connect(self.toggle_generate_button)
+        self.spanish_button.stateChanged.connect(self.toggle_generate_button)
+        self.french_button.stateChanged.connect(self.toggle_generate_button)
+
+        # Подключение кнопки к методу генерации
+        self.Generate_button.clicked.connect(self.generate_password)
+
+        # Проверка начального состояния флажков
+        self.toggle_generate_button()
 
     # Функция генерации пароля
     def generate_password(self):
@@ -901,55 +972,133 @@ class MainWindow(QMainWindow):
         password = ''.join(random.choice(charset) for _ in range(password_length))
         self.main_lineEdit.setText(password)
 
-    # Сохранение результатов
-    def save_results(self):
-        results_text = ""  # Объявление переменной и присвоение пустой строки
-        
-        # Открыть диалоговое окно выбора файла
-        options = QFileDialog.Options()
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Results", "", "Text Files (*.txt)", options=options)
-        
-        if not file_path:
-            return  # Отменено пользователем или не выбран файл
+    # Функция проверки флажков
+    def toggle_generate_button(self):
+        if (self.symbols_button.isChecked() or self.english_button.isChecked() or self.numbers_button.isChecked() or
+            self.china_button.isChecked() or self.russian_button.isChecked() or self.bulgarian_button.isChecked() or
+            self.serbian_button.isChecked() or self.macedonian_button.isChecked() or self.greek_button.isChecked() or
+            self.japanese_button.isChecked() or self.korean_button.isChecked() or self.german_button.isChecked() or
+            self.spanish_button.isChecked() or self.french_button.isChecked()):
+            self.Generate_button.setEnabled(True)
+        else:
+            self.Generate_button.setEnabled(False)
 
-        # Проверка, что все поля не пусты
-        if (not self.years_label.text() or
-            not self.months_label.text() or
-            not self.days_label.text() or
-            not self.hours_label.text() or
-            not self.minutes_label.text() or
-            not self.seconds_label.text()):
-            self.output_label.setText("Заполните все поля перед сохранением!")
-            return
+    # Переключение флажков
+    def toggle_all_checkboxes(self, state):
+        self.russian_button.setChecked(state)
+        self.bulgarian_button.setChecked(state)
+        self.serbian_button.setChecked(state)
+        self.macedonian_button.setChecked(state)
+        self.greek_button.setChecked(state)
+        self.japanese_button.setChecked(state)
+        self.korean_button.setChecked(state)
+        self.german_button.setChecked(state)
+        self.spanish_button.setChecked(state)
+        self.french_button.setChecked(state)
+        self.symbols_button.setChecked(state)
+        self.english_button.setChecked(state)
+        self.numbers_button.setChecked(state)
+        self.china_button.setChecked(state)
 
-        # Формирование текста для сохранения в файл
-        results_text = f"Пароль: {self.pass_edit_prcheck.text()}\n"
-        results_text += f"Хэшей в секунду (В миллионах): {self.ProcPower_SpinBox.value()}\n\n"
-        results_text += f"Примерное время для подбора пароля:\n"
-        results_text += f"Годы: {self.years_label.text()}\n"
-        results_text += f"Месяцы: {self.months_label.text()}\n"
-        results_text += f"Дни: {self.days_label.text()}\n"
-        results_text += f"Часы: {self.hours_label.text()}\n"
-        results_text += f"Минуты: {self.minutes_label.text()}\n"
-        results_text += f"Секунды: {self.seconds_label.text()}\n"
-        results_text += f'Данные расчёты не являются абсолютными и не могут служить точным индикатором надёжности пароля. Оценка времени подбора пароля основана на теоретической вычислительной мощности и не учитывает всех факторов, таких как специфические методы атак, оптимизация алгоритмов или аппаратное обеспечение злоумышленников. Предполагается, что для шифрования используется алгоритм "AES-256".'
+# Главное окно приложения
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        uic.loadUi('data/main.ui', self)
 
+        # Название, иконка, размер
+        self.setWindowTitle('ProCrypt')
+        self.setWindowIcon(QIcon(r'data\ProCrypt.ico'))
+        self.setFixedSize(self.size())
+
+        # Запрет на переход в полноэкранный режим
+        self.setWindowFlags(Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
+
+        # Инициализация класса вкладки Пароль
+        self.workplace_tab = Password(self.tabWidget)
+        # Инициализация класса вкладки Защита
+        self.protect_tab = Protect(self.tabWidget)
+        # Инициализация класса вкладки Метаданные
+        self.metadata = Metadata(self.tabWidget)
+        # Инициализация класса вкладки Архивы
+        self.archives = Archives(self.tabWidget)
+        # Инициализация класса вкладки Менеджер
+        self.manager = Manager(self.tabWidget)
+
+        self.tabWidget.setCurrentIndex(0)
+
+        # Ссылки на действия
+        self.aboutapp_action = self.findChild(QAction, 'aboutapp')
+        self.user_agreement_action = self.findChild(QAction, 'user_agreement')
+        self.password_tab_action = self.findChild(QAction, 'password_tab')
+        self.protect_tab_action = self.findChild(QAction, 'protect_tab')
+        self.metadata_tab_action = self.findChild(QAction, 'metadata_tab')
+        self.archives_tab_action = self.findChild(QAction, 'archives_tab')
+        self.manager_tab_action = self.findChild(QAction, 'manager_tab')
+
+        # Кнопка для сайта (скоро)
+        self.website_commandLinkButton = self.findChild(QtWidgets.QCommandLinkButton, 'website_commandLinkButton')
+
+        # Подключение методов
+        self.aboutapp_action.triggered.connect(lambda: self.show_aboutapp())
+        self.user_agreement_action.triggered.connect(lambda: self.show_user_agreement())
+        self.password_tab_action.triggered.connect(lambda: self.show_file_content(self.password_tab_action))
+        self.protect_tab_action.triggered.connect(lambda: self.show_file_content(self.protect_tab_action))
+        self.metadata_tab_action.triggered.connect(lambda: self.show_file_content(self.metadata_tab_action))
+        self.archives_tab_action.triggered.connect(lambda: self.show_file_content(self.archives_tab_action))
+        self.manager_tab_action.triggered.connect(lambda: self.show_file_content(self.manager_tab_action))
+        self.website_commandLinkButton.clicked.connect(self.open_website)
+
+    # Подключение к сайту
+    def open_website(self):
+        QMessageBox.information(self, "Скоро ...", "Сайт приложения находится в разработке. Спасибо что пользуетесь ProCrypt.")
+
+    # Общий метод для отображения содержимого файлов для вкладок
+    def show_file_content(self, action):
+        # Путь к файлам справок
+        file_mapping = {
+            'password_tab': 'data/userinfo/password.md',
+            'protect_tab': 'data/userinfo/protect.md',
+            'metadata_tab': 'data/userinfo/metadata.md',
+            'archives_tab': 'data/userinfo/archives.md',
+            'manager_tab': 'data/userinfo/manager.md'
+        }
+
+        # Определение пути к файлу по действию
+        file_name = file_mapping.get(action.objectName())
+        if file_name:
+            self._open_file_dialog(file_name)
+
+    # О приложении
+    def show_aboutapp(self):
+        self._open_file_dialog('data/userinfo/aboutapp.md')
+
+    # Соглашение
+    def show_user_agreement(self):
+        self._open_file_dialog('data/userinfo/user_agreement.md')
+
+    # Отображение содержимого
+    def _open_file_dialog(self, file_path):
         try:
-            # Запись текста в файл
-            with open(file_path, 'w', encoding='utf-8') as file:
-                file.write(results_text)
-            
-            # Уведомление об успешном сохранении
-            QMessageBox.information(self, "Успех", "Файл успешно сохранён!")
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
 
+            # Диалоговое окно для текста
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Справочный материал")
+            layout = QVBoxLayout(dialog)
+            label = QLabel(content, dialog)
+            layout.addWidget(label)
+            dialog.setLayout(layout)
+            dialog.exec_()
+
+        except FileNotFoundError:
+            QMessageBox.warning(self, "Ошибка", f"Файл {file_path} не найден!")
         except Exception as e:
-            # Ошибка при сохранении файла
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл: {e}")
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {e}")
 
-# Главный цикл программы
 if __name__ == "__main__":
-    initialize_password_manager_db()  # Создать таблицу, если её ещё нет
-    app = QApplication(sys.argv)
+    app = QtWidgets.QApplication(sys.argv)
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
