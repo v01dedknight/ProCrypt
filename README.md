@@ -42,7 +42,7 @@ pip install py7zr Pillow PyQt5 cryptography reportlab webbrowser
 
 1. Клонируйте репозиторий или скачайте приложение.  
 
-git clone https://github.com/v01dedknight/ProCrypt/releases/download/v2.0/ProCrypt.2.0.7z
+git clone https://github.com/v01dedknight/ProCrypt/releases/download/v2.1/ProCrypt_v2.1.7z
 
 2. Запустите приложение:  
 
@@ -51,4 +51,4 @@ python main.py
 ## Лицензия  
 
 Программа ProCrypt предоставляется "как есть" (as is), без каких-либо гарантий. Автор не несёт ответственности за возможный ущерб, вызванный использованием данного программного обеспечения.
-Использование программы означает согласие с условиями [Пользовательского соглашения](https://github.com/v01dedknight/ProCrypt/blob/main/data/userinfo/user_agreement.md), опубликованного в данном репозитории.
+Использование программы означает согласие с условиями [Пользовательского соглашения](https://github.com/v01dedknight/ProCrypt/blob/main/user_agreement.md), опубликованного в данном репозитории.
