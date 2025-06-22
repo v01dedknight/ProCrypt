@@ -32,17 +32,18 @@
 - py7zr  
 - pycryptodome
 - reportlab
-- webbrowser
+- webbrowser (встроенная в python библиотека)
+- logging (встроенная в python библиотека)
 
 ### Установка зависимостей  
 
-pip install py7zr Pillow PyQt5 cryptography reportlab webbrowser
+pip install py7zr Pillow PyQt5 cryptography reportlab
 
 ## Как запустить  
 
 1. Клонируйте репозиторий или скачайте приложение.  
 
-git clone https://github.com/v01dedknight/ProCrypt/releases/download/v2.2/ProCrypt_v2.2.7z
+git clone https://github.com/v01dedknight/ProCrypt/releases/download/v2.3/ProCrypt_v2.3.7z
 
 2. Запустите приложение:  
 
