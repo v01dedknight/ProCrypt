@@ -43,7 +43,7 @@ pip install py7zr Pillow PyQt5 cryptography reportlab
 
 1. Клонируйте репозиторий или скачайте приложение.  
 
-git clone https://github.com/v01dedknight/ProCrypt/releases/download/v2.4/ProCrypt_v2.4.7z
+git clone https://github.com/v01dedknight/ProCrypt/releases/download/v2.5/ProCrypt_v2.5.7z
 
 2. Запустите приложение:  
 
