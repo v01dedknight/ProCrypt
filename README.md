@@ -47,10 +47,10 @@ git clone https://github.com/v01dedknight/ProCrypt/releases/download/v2.5/ProCry
 
 2. Запустите приложение:  
 
-- Запуск в консоли:
+Запуск в консоли:
 python ProCrypt.py
 
-- Запуск через файл:
+Запуск через файл:
 ProCrypt.exe
 
 ## Лицензия  
