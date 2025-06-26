@@ -1,6 +1,5 @@
 import sys
 import os
-import random
 import string
 import re
 import py7zr
@@ -1060,8 +1059,10 @@ class Password(QtWidgets.QWidget):
         if self.symbols_button.isChecked():
             charset += "!@#$%^&*()-_=+[]{}|;:,.<>?~/"
         if self.china_button.isChecked():
-            charset += ''.join(chr(random.randint(0x4e00, 0x9fff)) for _ in range(100))
-
+            china_massive = []
+            for _ in range(0x4e00, 0x9fff + 1):
+                china_massive.append(_)
+            charset += ''.join(chr(secrets.choice(china_massive)) for _ in range(len(china_massive)))
         if self.russian_button.isChecked():
             charset += ''.join(chr(code) for code in range(0x0400, 0x052F + 1))
         if self.bulgarian_button.isChecked():
@@ -1083,7 +1084,7 @@ class Password(QtWidgets.QWidget):
         if self.french_button.isChecked():
             charset += 'àâæçéèêëîïôœùûüÿÀÂÆÇÉÈÊËÎÏÔŒÙÛÜŸ'
 
-        password = ''.join(random.choice(charset) for _ in range(password_length))
+        password = ''.join(secrets.choice(charset) for _ in range(password_length))
         self.main_lineEdit.setText(password)
 
     # Функция проверки флажков
@@ -1121,7 +1122,7 @@ class MainWindow(QtWidgets.QMainWindow):
         uic.loadUi('data/main.ui', self)
 
         # Название, иконка, размер
-        self.setWindowTitle('ProCrypt v2.5')
+        self.setWindowTitle('ProCrypt v2.6')
         self.setWindowIcon(QIcon(r'data\ProCrypt.ico'))
         self.setFixedSize(self.size())
 
