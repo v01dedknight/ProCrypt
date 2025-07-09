@@ -34,6 +34,8 @@ from lzma import LZMAError
 
 from path_utils import ensure_database_exists, ensure_salt_exists, get_working_db_path, get_salt_path, get_resource_path
 
+import requests
+
 # Логирование (по умолчанию отключено)
 logging_enabled = False
 
@@ -1122,7 +1124,7 @@ class MainWindow(QtWidgets.QMainWindow):
         uic.loadUi('data/main.ui', self)
 
         # Название, иконка, размер
-        self.setWindowTitle('ProCrypt v2.6')
+        self.setWindowTitle('ProCrypt v2.7')
         self.setWindowIcon(QIcon(r'data\ProCrypt.ico'))
         self.setFixedSize(self.size())
 
@@ -1164,6 +1166,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.manager_tab_action.triggered.connect(lambda: self.show_file_content(self.manager_tab_action))
         self.website_commandLinkButton.clicked.connect(self.open_website)
 
+        # Проверка обновлений
+        self.new_release_search()
+
         # Запрос на логирование у пользователя
         self.ask_logging_permission()
         
@@ -1171,14 +1176,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.radio_light = self.findChild(QtWidgets.QRadioButton, 'radioButton_light_theme')
         self.radio_dark = self.findChild(QtWidgets.QRadioButton, 'radioButton_dark_theme')
         
-        # Дефолтная тема - светлая
+        # Тема по умолчанию - светлая
         self.radio_light.setChecked(True)
         self.apply_light_theme()
 
         # Подключение обработчиков
         self.radio_light.toggled.connect(self.on_theme_changed)
         self.radio_dark.toggled.connect(self.on_theme_changed)
-        
+
+    # Проверка обновлений
+    def new_release_search(self):
+        try:
+            res = requests.get('https://api.github.com/repos/v01dedknight/ProCrypt/releases')
+            data = res.json()
+
+            if data[0]['tag_name'] != 'v2.7':
+                QMessageBox.information(self, "Обновление", "Вышло обновление ProCrypt! Успейте установить новую версию в репозитории.")  
+        except Exception as e:
+            log_warning(f"Ошибка: {e}.\nМетод new_release_search.", exc=True)
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка во время проверки обновлений.")           
+
     # Выбор темы
     def on_theme_changed(self):
         if self.radio_dark.isChecked():
